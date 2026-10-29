@@ -67,7 +67,7 @@ export const KasirView: React.FC = () => {
   };
 
   // Eksekusi Pembayaran
-  const handleCheckout = (e: React.FormEvent) => {
+  const handleCheckout = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (cart.length === 0) {
@@ -81,7 +81,7 @@ export const KasirView: React.FC = () => {
     }
 
     const finalPay = paymentMethod === 'Tunai' ? nominalBayar : totalBelanja;
-    const result = checkoutTransaction(finalPay, paymentMethod);
+    const result = await checkoutTransaction(finalPay, paymentMethod);
 
     if (result) {
       setPayAmountInput('');

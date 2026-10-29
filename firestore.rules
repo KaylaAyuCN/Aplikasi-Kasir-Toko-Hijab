@@ -1,0 +1,65 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll(['id', 'name', 'category', 'target', 'price', 'stock', 'image'])
+        && data.id is string && data.id.size() <= 128
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 200
+        && data.category is string && data.category.size() <= 100
+        && (data.target == 'Dewasa' || data.target == 'Anak-anak')
+        && data.price is number && data.price >= 0
+        && data.stock is number && data.stock >= 0
+        && data.image is string && data.image.size() <= 1000000;
+    }
+
+    function isValidTransaction(data) {
+      return data.keys().hasAll(['id', 'invoiceNumber', 'date', 'items', 'totalAmount', 'payAmount', 'changeAmount'])
+        && data.id is string && data.id.size() <= 128
+        && data.invoiceNumber is string && data.invoiceNumber.size() <= 64
+        && data.date is string && data.date.size() <= 64
+        && data.totalAmount is number && data.totalAmount >= 0
+        && data.payAmount is number && data.payAmount >= data.totalAmount
+        && data.changeAmount is number && data.changeAmount >= 0
+        && data.items is list && data.items.size() > 0 && data.items.size() <= 200;
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Connection testing endpoint
+    match /test/{docId} {
+      allow read, write: if true;
+    }
+
+    // Products collection: Store catalog and inventory
+    match /products/{productId} {
+      allow get, list: if true;
+      allow create: if isValidId(productId) && isValidProduct(incoming()) && incoming().id == productId;
+      allow update: if isValidId(productId) && isValidProduct(incoming()) && incoming().id == existing().id;
+      allow delete: if isValidId(productId);
+    }
+
+    // Transactions collection: Sales history and receipts
+    match /transactions/{transactionId} {
+      allow get, list: if true;
+      allow create: if isValidId(transactionId) && isValidTransaction(incoming()) && incoming().id == transactionId;
+      allow update, delete: if false; // Transactions are immutable audit records
+    }
+  }
+}

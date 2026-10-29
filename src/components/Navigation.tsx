@@ -9,6 +9,9 @@ import {
   Clock,
   Menu,
   X,
+  Cloud,
+  CheckCircle2,
+  RefreshCw,
 } from 'lucide-react';
 
 export type ActiveTab = 'dashboard' | 'kasir' | 'produk' | 'laporan';
@@ -19,7 +22,7 @@ interface NavigationProps {
 }
 
 export const Navigation: React.FC<NavigationProps> = ({ activeTab, onTabChange }) => {
-  const { cart } = useStore();
+  const { cart, isCloudSynced, isSyncing } = useStore();
   const [currentTime, setCurrentTime] = useState('');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -109,8 +112,37 @@ export const Navigation: React.FC<NavigationProps> = ({ activeTab, onTabChange }
           })}
         </nav>
 
-        {/* Right Info: Live Clock */}
+        {/* Right Info: Cloud Status & Live Clock */}
         <div className="flex items-center gap-2">
+          {/* Cloud Database Sync Status */}
+          <div
+            title={
+              isSyncing
+                ? 'Sedang menyinkronkan data dengan Cloud Firestore...'
+                : isCloudSynced
+                ? 'Foto & data produk tersinkronisasi permanen ke Cloud Firestore (lintas browser & Vercel)'
+                : 'Penyimpanan lokal aktif'
+            }
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-[#FFF8F0] border border-[#D99AA6]/25 text-[11px] font-semibold text-[#765548]"
+          >
+            {isSyncing ? (
+              <>
+                <RefreshCw className="w-3.5 h-3.5 text-[#D99AA6] animate-spin" />
+                <span className="hidden sm:inline">Sinkronisasi...</span>
+              </>
+            ) : isCloudSynced ? (
+              <>
+                <Cloud className="w-3.5 h-3.5 text-emerald-600" />
+                <span className="hidden sm:inline text-emerald-800">Cloud Aktif</span>
+              </>
+            ) : (
+              <>
+                <Cloud className="w-3.5 h-3.5 text-[#765548]/60" />
+                <span className="hidden sm:inline text-[#765548]/70">Lokal Aktif</span>
+              </>
+            )}
+          </div>
+
           <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#FFF8F0] border border-[#D99AA6]/25 text-[#765548] text-xs font-semibold">
             <Clock className="w-3.5 h-3.5 text-[#D99AA6]" />
             <span>{currentTime} WIB</span>

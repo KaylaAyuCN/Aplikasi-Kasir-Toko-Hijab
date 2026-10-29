@@ -183,7 +183,7 @@ export const ProdukView: React.FC = () => {
     setIsModalOpen(true);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!name.trim()) {
@@ -192,7 +192,7 @@ export const ProdukView: React.FC = () => {
     }
 
     if (editingProduct) {
-      updateProduct({
+      await updateProduct({
         ...editingProduct,
         name: name.trim(),
         category,
@@ -203,7 +203,7 @@ export const ProdukView: React.FC = () => {
         description: description.trim() || undefined,
       });
     } else {
-      addProduct({
+      await addProduct({
         name: name.trim(),
         category,
         target,
@@ -217,9 +217,9 @@ export const ProdukView: React.FC = () => {
     setIsModalOpen(false);
   };
 
-  const handleDelete = (p: Product) => {
+  const handleDelete = async (p: Product) => {
     if (window.confirm(`Yakin ingin menghapus produk "${p.name}"?`)) {
-      deleteProduct(p.id);
+      await deleteProduct(p.id);
     }
   };
 

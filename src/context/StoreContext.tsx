@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { Product, Transaction, CartItem } from '../types';
 import { INITIAL_PRODUCTS, INITIAL_TRANSACTIONS } from '../data/initialData';
 import { generateInvoiceNumber } from '../utils/formatters';
@@ -10,6 +10,14 @@ import {
   getItemDB,
   STORAGE_KEYS,
 } from '../utils/storage';
+import {
+  testConnection,
+  fetchProductsFromCloud,
+  saveProductToCloud,
+  deleteProductFromCloud,
+  fetchTransactionsFromCloud,
+  saveTransactionToCloud,
+} from '../lib/firebase';
 
 interface StoreContextType {
   products: Product[];
@@ -19,44 +27,29 @@ interface StoreContextType {
   updateCartQuantity: (productId: string, quantity: number) => void;
   removeFromCart: (productId: string) => void;
   clearCart: () => void;
-  checkoutTransaction: (payAmount: number, paymentMethod?: string) => Transaction | null;
-  addProduct: (product: Omit<Product, 'id'>) => void;
-  updateProduct: (product: Product) => void;
-  deleteProduct: (productId: string) => void;
-  resetToInitialData: () => void;
-  importProducts: (importedList: Product[]) => boolean;
+  checkoutTransaction: (payAmount: number, paymentMethod?: string) => Promise<Transaction | null>;
+  addProduct: (product: Omit<Product, 'id'>) => Promise<void>;
+  updateProduct: (product: Product) => Promise<void>;
+  deleteProduct: (productId: string) => Promise<void>;
+  resetToInitialData: () => Promise<void>;
+  importProducts: (importedList: Product[]) => Promise<boolean>;
   exportProductsJson: () => string;
   activeReceipt: Transaction | null;
   setActiveReceipt: (trx: Transaction | null) => void;
   toast: { message: string; type: 'success' | 'error' | 'info' } | null;
   showToast: (message: string, type?: 'success' | 'error' | 'info') => void;
+  isCloudSynced: boolean;
+  isSyncing: boolean;
 }
 
 const StoreContext = createContext<StoreContextType | null>(null);
 
 export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // 1. Inisialisasi awal produk dari localStorage (atau migrasi dari key lama)
+  // 1. Inisialisasi awal produk dari cache lokal untuk first paint instan
   const [products, setProducts] = useState<Product[]>(() => getInitialProducts());
-
-  // 2. Inisialisasi transaksi dari penyimpanan
   const [transactions, setTransactions] = useState<Transaction[]>(() => getInitialTransactions());
-
-  // 3. Hydrate dari IndexedDB saat pertama kali dimuat.
-  // IndexedDB menampung data foto beresolusi tinggi tanpa batasan 5MB localStorage,
-  // menjamin foto tetap utuh setelah reload di Vercel maupun perangkat mobile.
-  useEffect(() => {
-    getItemDB<Product[]>(STORAGE_KEYS.PRODUCTS).then((dbProducts) => {
-      if (dbProducts && Array.isArray(dbProducts) && dbProducts.length > 0) {
-        setProducts(dbProducts);
-      }
-    });
-
-    getItemDB<Transaction[]>(STORAGE_KEYS.TRANSACTIONS).then((dbTrx) => {
-      if (dbTrx && Array.isArray(dbTrx) && dbTrx.length > 0) {
-        setTransactions(dbTrx);
-      }
-    });
-  }, []);
+  const [isCloudSynced, setIsCloudSynced] = useState<boolean>(false);
+  const [isSyncing, setIsSyncing] = useState<boolean>(true);
 
   // Cart state
   const [cart, setCart] = useState<CartItem[]>(() => {
@@ -76,20 +69,71 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     null
   );
 
-  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
+  const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3500);
-  };
+  }, []);
 
-  // Simpan produk ke dual-layer (IndexedDB + localStorage) setiap kali state berubah
+  // 2. Hydration dan sinkronisasi Cloud Firestore saat aplikasi pertama kali berjalan
   useEffect(() => {
-    persistProducts(products);
-  }, [products]);
+    let isMounted = true;
 
-  // Simpan riwayat transaksi ke IndexedDB & localStorage
-  useEffect(() => {
-    persistTransactions(transactions);
-  }, [transactions]);
+    async function initializeStoreData() {
+      setIsSyncing(true);
+      // Validasi koneksi awal ke Firestore
+      await testConnection();
+
+      try {
+        // Ambil data produk terbaru dari Firestore
+        const cloudProducts = await fetchProductsFromCloud();
+        if (isMounted) {
+          if (cloudProducts && cloudProducts.length > 0) {
+            setProducts(cloudProducts);
+            persistProducts(cloudProducts);
+            setIsCloudSynced(true);
+          } else {
+            // Jika Firestore masih kosong (pertama kali provision), unggah produk bawaan agar tersimpan permanen
+            const localCached = (await getItemDB<Product[]>(STORAGE_KEYS.PRODUCTS)) || getInitialProducts();
+            const seedProducts = localCached.length > 0 ? localCached : INITIAL_PRODUCTS;
+            setProducts(seedProducts);
+            persistProducts(seedProducts);
+
+            // Simpan produk awal ke Cloud Firestore secara asynchronous
+            Promise.all(seedProducts.map((p) => saveProductToCloud(p))).then(() => {
+              if (isMounted) setIsCloudSynced(true);
+            });
+          }
+        }
+
+        // Ambil data riwayat transaksi dari Firestore
+        const cloudTrx = await fetchTransactionsFromCloud();
+        if (isMounted) {
+          if (cloudTrx && cloudTrx.length > 0) {
+            setTransactions(cloudTrx);
+            persistTransactions(cloudTrx);
+          } else {
+            const localTrx = (await getItemDB<Transaction[]>(STORAGE_KEYS.TRANSACTIONS)) || getInitialTransactions();
+            const seedTrx = localTrx.length > 0 ? localTrx : INITIAL_TRANSACTIONS;
+            setTransactions(seedTrx);
+            persistTransactions(seedTrx);
+            seedTrx.forEach((trx) => saveTransactionToCloud(trx));
+          }
+        }
+      } catch (err) {
+        console.warn('Gagal sinkronisasi data cloud Firestore, menggunakan penyimpanan lokal:', err);
+      } finally {
+        if (isMounted) {
+          setIsSyncing(false);
+        }
+      }
+    }
+
+    initializeStoreData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Simpan keranjang ke localStorage
   useEffect(() => {
@@ -169,7 +213,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   // Checkout transaction
-  const checkoutTransaction = (payAmount: number, paymentMethod = 'Tunai'): Transaction | null => {
+  const checkoutTransaction = async (payAmount: number, paymentMethod = 'Tunai'): Promise<Transaction | null> => {
     if (cart.length === 0) {
       showToast('Keranjang belanja masih kosong!', 'error');
       return null;
@@ -218,20 +262,27 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       paymentMethod,
     };
 
-    // 1. Deduct stock automatically
-    setProducts((prev) =>
-      prev.map((prod) => {
-        const cartItem = cart.find((c) => c.product.id === prod.id);
-        if (!cartItem) return prod;
-        return {
-          ...prod,
-          stock: Math.max(0, prod.stock - cartItem.quantity),
-        };
-      })
-    );
+    // 1. Deduct stock and update both local state and Firestore
+    const updatedProducts = products.map((prod) => {
+      const cartItem = cart.find((c) => c.product.id === prod.id);
+      if (!cartItem) return prod;
+      const updated = {
+        ...prod,
+        stock: Math.max(0, prod.stock - cartItem.quantity),
+      };
+      // Simpan perubahan pengurangan stok produk ke Firestore
+      saveProductToCloud(updated);
+      return updated;
+    });
 
-    // 2. Save transaction to history
-    setTransactions((prev) => [newTransaction, ...prev]);
+    setProducts(updatedProducts);
+    persistProducts(updatedProducts);
+
+    // 2. Save transaction to history (local & Firestore)
+    const updatedTrx = [newTransaction, ...transactions];
+    setTransactions(updatedTrx);
+    persistTransactions(updatedTrx);
+    saveTransactionToCloud(newTransaction);
 
     // 3. Clear cart
     clearCart();
@@ -243,19 +294,28 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return newTransaction;
   };
 
-  // Add new product
-  const addProduct = (productData: Omit<Product, 'id'>) => {
+  // Add new product (syncs to Cloud Firestore & Local DB)
+  const addProduct = async (productData: Omit<Product, 'id'>) => {
     const id = `PRD-${Date.now().toString().slice(-4)}`;
     const newProd: Product = {
       ...productData,
       id,
     };
-    setProducts((prev) => [newProd, ...prev]);
-    showToast(`Produk "${newProd.name}" berhasil ditambahkan!`, 'success');
+    const updatedList = [newProd, ...products];
+    setProducts(updatedList);
+    persistProducts(updatedList);
+
+    // Simpan ke Cloud Firestore permanen
+    const success = await saveProductToCloud(newProd);
+    if (success) {
+      showToast(`Produk "${newProd.name}" berhasil ditambahkan & tersimpan di Cloud!`, 'success');
+    } else {
+      showToast(`Produk "${newProd.name}" tersimpan di lokal (mode offline)`, 'info');
+    }
   };
 
-  // Update existing product
-  const updateProduct = (updatedProduct: Product) => {
+  // Update existing product (syncs to Cloud Firestore & Local DB)
+  const updateProduct = async (updatedProduct: Product) => {
     const updatedList = products.map((p) => (p.id === updatedProduct.id ? updatedProduct : p));
     setProducts(updatedList);
     persistProducts(updatedList);
@@ -268,27 +328,42 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           : item
       )
     );
-    showToast(`Produk "${updatedProduct.name}" berhasil diperbarui`, 'success');
+
+    // Simpan ke Cloud Firestore permanen
+    const success = await saveProductToCloud(updatedProduct);
+    if (success) {
+      showToast(`Foto & data "${updatedProduct.name}" berhasil diperbarui permanen!`, 'success');
+    } else {
+      showToast(`Produk "${updatedProduct.name}" diperbarui di memori lokal`, 'info');
+    }
   };
 
-  // Delete product
-  const deleteProduct = (productId: string) => {
+  // Delete product (syncs to Cloud Firestore & Local DB)
+  const deleteProduct = async (productId: string) => {
     const prod = products.find((p) => p.id === productId);
     const updatedList = products.filter((p) => p.id !== productId);
     setProducts(updatedList);
     persistProducts(updatedList);
     setCart((prev) => prev.filter((item) => item.product.id !== productId));
+
+    // Hapus dari Cloud Firestore
+    await deleteProductFromCloud(productId);
     showToast(`Produk "${prod?.name || ''}" telah dihapus`, 'info');
   };
 
   // Reset to initial demo data
-  const resetToInitialData = () => {
+  const resetToInitialData = async () => {
     setProducts(INITIAL_PRODUCTS);
     setTransactions(INITIAL_TRANSACTIONS);
     setCart([]);
     persistProducts(INITIAL_PRODUCTS);
     persistTransactions(INITIAL_TRANSACTIONS);
-    showToast('Data aplikasi berhasil dikembalikan ke data awal', 'info');
+
+    // Reset di cloud juga
+    for (const p of INITIAL_PRODUCTS) {
+      await saveProductToCloud(p);
+    }
+    showToast('Data aplikasi berhasil dikembalikan ke data awal & disinkronkan', 'info');
   };
 
   // Ekspor seluruh katalog produk (termasuk foto) ke file JSON
@@ -296,8 +371,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return JSON.stringify(products, null, 2);
   };
 
-  // Impor katalog produk dari file JSON (memungkinkan transfer antar-domain/Vercel)
-  const importProducts = (importedList: Product[]): boolean => {
+  // Impor katalog produk dari file JSON
+  const importProducts = async (importedList: Product[]): Promise<boolean> => {
     if (!Array.isArray(importedList) || importedList.length === 0) {
       showToast('File data produk tidak valid!', 'error');
       return false;
@@ -309,7 +384,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     setProducts(importedList);
     persistProducts(importedList);
-    showToast(`${importedList.length} produk berhasil diimpor & disimpan permanen!`, 'success');
+
+    // Unggah semua produk impor ke Cloud Firestore
+    Promise.all(importedList.map((p) => saveProductToCloud(p))).then(() => {
+      showToast(`${importedList.length} produk berhasil diimpor & tersimpan permanen di Cloud!`, 'success');
+    });
+
     return true;
   };
 
@@ -334,6 +414,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setActiveReceipt,
         toast,
         showToast,
+        isCloudSynced,
+        isSyncing,
       }}
     >
       {children}

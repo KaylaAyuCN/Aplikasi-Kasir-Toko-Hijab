@@ -1,0 +1,115 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "Pulchra Hijab product item with photo, category, price, and stock",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique product ID"
+        },
+        "name": {
+          "type": "string",
+          "description": "Product name"
+        },
+        "category": {
+          "type": "string",
+          "description": "Hijab category (e.g. Pashmina, Segi Empat, Bergo)"
+        },
+        "target": {
+          "type": "string",
+          "description": "Target segment: Dewasa or Anak-anak",
+          "enum": ["Dewasa", "Anak-anak"]
+        },
+        "price": {
+          "type": "number",
+          "description": "Selling price in IDR"
+        },
+        "stock": {
+          "type": "number",
+          "description": "Current stock count"
+        },
+        "image": {
+          "type": "string",
+          "description": "Product photo URL or optimized base64 data"
+        },
+        "description": {
+          "type": "string",
+          "description": "Product description or material details"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Last update timestamp"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation timestamp"
+        }
+      },
+      "required": ["id", "name", "category", "target", "price", "stock", "image"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Completed sales transaction record",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique transaction ID"
+        },
+        "invoiceNumber": {
+          "type": "string",
+          "description": "Invoice number (e.g. TRX-20261029-0001)"
+        },
+        "date": {
+          "type": "string",
+          "description": "ISO date string"
+        },
+        "items": {
+          "type": "array",
+          "description": "Purchased items list"
+        },
+        "totalAmount": {
+          "type": "number",
+          "description": "Total purchase amount"
+        },
+        "payAmount": {
+          "type": "number",
+          "description": "Amount paid by customer"
+        },
+        "changeAmount": {
+          "type": "number",
+          "description": "Change returned to customer"
+        },
+        "cashierName": {
+          "type": "string",
+          "description": "Name of cashier handling the order"
+        },
+        "paymentMethod": {
+          "type": "string",
+          "description": "Payment method (Tunai, QRIS, Transfer, Kartu Debit)"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Server creation timestamp"
+        }
+      },
+      "required": ["id", "invoiceNumber", "date", "items", "totalAmount", "payAmount", "changeAmount"]
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": {
+        "$ref": "#/entities/Product"
+      },
+      "description": "Public store product catalog and inventory"
+    },
+    "/transactions/{transactionId}": {
+      "schema": {
+        "$ref": "#/entities/Transaction"
+      },
+      "description": "Completed sales transactions and receipts"
+    }
+  }
+}
