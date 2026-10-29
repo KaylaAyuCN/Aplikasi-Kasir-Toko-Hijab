@@ -19,11 +19,21 @@ import {
   ImageIcon,
   Camera,
   Check,
+  Download,
+  FileUp,
 } from 'lucide-react';
 
 export const ProdukView: React.FC = () => {
-  const { products, addProduct, updateProduct, deleteProduct, resetToInitialData, showToast } =
-    useStore();
+  const {
+    products,
+    addProduct,
+    updateProduct,
+    deleteProduct,
+    resetToInitialData,
+    importProducts,
+    exportProductsJson,
+    showToast,
+  } = useStore();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTarget, setSelectedTarget] = useState<'Semua' | 'Dewasa' | 'Anak-anak'>('Semua');
@@ -66,6 +76,46 @@ export const ProdukView: React.FC = () => {
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
+    }
+  };
+
+  // Cadangkan dan Impor data katalog produk (termasuk foto)
+  const jsonInputRef = useRef<HTMLInputElement>(null);
+
+  const handleExportJson = () => {
+    try {
+      const jsonStr = exportProductsJson();
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `pulchra-katalog-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('Data produk berhasil dicadangkan ke file JSON!', 'success');
+    } catch {
+      showToast('Gagal mencadangkan data produk!', 'error');
+    }
+  };
+
+  const handleImportJson = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const parsed = JSON.parse(event.target?.result as string);
+        importProducts(parsed);
+      } catch {
+        showToast('Gagal membaca file JSON. Pastikan format file sesuai!', 'error');
+      }
+    };
+    reader.readAsText(file);
+    if (jsonInputRef.current) {
+      jsonInputRef.current.value = '';
     }
   };
 
@@ -189,13 +239,44 @@ export const ProdukView: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={handleOpenAdd}
-          className="flex items-center gap-1.5 px-4 py-2.5 rounded-2xl bg-[#D99AA6] hover:bg-[#C98B97] text-white font-bold text-xs shadow-md active:scale-95 transition-all self-start cursor-pointer"
-        >
-          <Plus className="w-4 h-4" />
-          Tambah Produk Baru
-        </button>
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+          {/* Input File Tersembunyi untuk Impor JSON */}
+          <input
+            type="file"
+            ref={jsonInputRef}
+            accept=".json,application/json"
+            onChange={handleImportJson}
+            className="hidden"
+          />
+
+          <button
+            type="button"
+            onClick={handleExportJson}
+            title="Unduh seluruh data produk & foto sebagai file cadangan JSON"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-2xl bg-[#FFF8F0] hover:bg-[#faeee0] border border-[#D99AA6]/35 text-[#765548] font-semibold text-xs shadow-2xs active:scale-95 transition-all cursor-pointer"
+          >
+            <Download className="w-3.5 h-3.5 text-[#D99AA6]" />
+            <span className="hidden sm:inline">Cadangkan</span> Data
+          </button>
+
+          <button
+            type="button"
+            onClick={() => jsonInputRef.current?.click()}
+            title="Pulihkan data produk & foto dari file cadangan JSON (misal setelah deploy ke Vercel)"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-2xl bg-[#FFF8F0] hover:bg-[#faeee0] border border-[#D99AA6]/35 text-[#765548] font-semibold text-xs shadow-2xs active:scale-95 transition-all cursor-pointer"
+          >
+            <FileUp className="w-3.5 h-3.5 text-[#D99AA6]" />
+            <span className="hidden sm:inline">Impor</span> Data
+          </button>
+
+          <button
+            onClick={handleOpenAdd}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-2xl bg-[#D99AA6] hover:bg-[#C98B97] text-white font-bold text-xs shadow-md active:scale-95 transition-all cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            Tambah Produk
+          </button>
+        </div>
       </div>
 
       {/* Toolbar Filter & Pencarian */}

@@ -2,6 +2,14 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { Product, Transaction, CartItem } from '../types';
 import { INITIAL_PRODUCTS, INITIAL_TRANSACTIONS } from '../data/initialData';
 import { generateInvoiceNumber } from '../utils/formatters';
+import {
+  getInitialProducts,
+  persistProducts,
+  getInitialTransactions,
+  persistTransactions,
+  getItemDB,
+  STORAGE_KEYS,
+} from '../utils/storage';
 
 interface StoreContextType {
   products: Product[];
@@ -16,6 +24,8 @@ interface StoreContextType {
   updateProduct: (product: Product) => void;
   deleteProduct: (productId: string) => void;
   resetToInitialData: () => void;
+  importProducts: (importedList: Product[]) => boolean;
+  exportProductsJson: () => string;
   activeReceipt: Transaction | null;
   setActiveReceipt: (trx: Transaction | null) => void;
   toast: { message: string; type: 'success' | 'error' | 'info' } | null;
@@ -25,40 +35,33 @@ interface StoreContextType {
 const StoreContext = createContext<StoreContextType | null>(null);
 
 export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Load products from localStorage or use initial data
-  const [products, setProducts] = useState<Product[]>(() => {
-    try {
-      const saved = localStorage.getItem('pulchra_products_v2') || localStorage.getItem('pulchra_products');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0].price === 'number') {
-          return parsed;
-        }
-      }
-      return INITIAL_PRODUCTS;
-    } catch {
-      return INITIAL_PRODUCTS;
-    }
-  });
+  // 1. Inisialisasi awal produk dari localStorage (atau migrasi dari key lama)
+  const [products, setProducts] = useState<Product[]>(() => getInitialProducts());
 
-  // Load transactions from localStorage or use initial data
-  const [transactions, setTransactions] = useState<Transaction[]>(() => {
-    try {
-      const saved = localStorage.getItem('pulchra_transactions');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
+  // 2. Inisialisasi transaksi dari penyimpanan
+  const [transactions, setTransactions] = useState<Transaction[]>(() => getInitialTransactions());
+
+  // 3. Hydrate dari IndexedDB saat pertama kali dimuat.
+  // IndexedDB menampung data foto beresolusi tinggi tanpa batasan 5MB localStorage,
+  // menjamin foto tetap utuh setelah reload di Vercel maupun perangkat mobile.
+  useEffect(() => {
+    getItemDB<Product[]>(STORAGE_KEYS.PRODUCTS).then((dbProducts) => {
+      if (dbProducts && Array.isArray(dbProducts) && dbProducts.length > 0) {
+        setProducts(dbProducts);
       }
-      return INITIAL_TRANSACTIONS;
-    } catch {
-      return INITIAL_TRANSACTIONS;
-    }
-  });
+    });
+
+    getItemDB<Transaction[]>(STORAGE_KEYS.TRANSACTIONS).then((dbTrx) => {
+      if (dbTrx && Array.isArray(dbTrx) && dbTrx.length > 0) {
+        setTransactions(dbTrx);
+      }
+    });
+  }, []);
 
   // Cart state
   const [cart, setCart] = useState<CartItem[]>(() => {
     try {
-      const saved = localStorage.getItem('pulchra_cart');
+      const saved = localStorage.getItem(STORAGE_KEYS.CART) || localStorage.getItem('pulchra_cart');
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
@@ -78,28 +81,21 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setTimeout(() => setToast(null), 3500);
   };
 
-  // Sync products to localStorage
+  // Simpan produk ke dual-layer (IndexedDB + localStorage) setiap kali state berubah
   useEffect(() => {
-    try {
-      localStorage.setItem('pulchra_products', JSON.stringify(products));
-    } catch (e) {
-      console.error('Failed saving products to localStorage', e);
-    }
+    persistProducts(products);
   }, [products]);
 
-  // Sync transactions to localStorage
+  // Simpan riwayat transaksi ke IndexedDB & localStorage
   useEffect(() => {
-    try {
-      localStorage.setItem('pulchra_transactions', JSON.stringify(transactions));
-    } catch (e) {
-      console.error('Failed saving transactions to localStorage', e);
-    }
+    persistTransactions(transactions);
   }, [transactions]);
 
-  // Sync cart to localStorage
+  // Simpan keranjang ke localStorage
   useEffect(() => {
     try {
-      localStorage.setItem('pulchra_cart', JSON.stringify(cart));
+      localStorage.setItem(STORAGE_KEYS.CART, JSON.stringify(cart));
+      localStorage.removeItem('pulchra_cart');
     } catch (e) {
       console.error('Failed saving cart to localStorage', e);
     }
@@ -260,8 +256,17 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Update existing product
   const updateProduct = (updatedProduct: Product) => {
-    setProducts((prev) =>
-      prev.map((p) => (p.id === updatedProduct.id ? updatedProduct : p))
+    const updatedList = products.map((p) => (p.id === updatedProduct.id ? updatedProduct : p));
+    setProducts(updatedList);
+    persistProducts(updatedList);
+
+    // Sinkronkan thumbnail foto di keranjang jika produk tersebut ada di keranjang
+    setCart((prevCart) =>
+      prevCart.map((item) =>
+        item.product.id === updatedProduct.id
+          ? { ...item, product: updatedProduct }
+          : item
+      )
     );
     showToast(`Produk "${updatedProduct.name}" berhasil diperbarui`, 'success');
   };
@@ -269,7 +274,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Delete product
   const deleteProduct = (productId: string) => {
     const prod = products.find((p) => p.id === productId);
-    setProducts((prev) => prev.filter((p) => p.id !== productId));
+    const updatedList = products.filter((p) => p.id !== productId);
+    setProducts(updatedList);
+    persistProducts(updatedList);
     setCart((prev) => prev.filter((item) => item.product.id !== productId));
     showToast(`Produk "${prod?.name || ''}" telah dihapus`, 'info');
   };
@@ -279,7 +286,31 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setProducts(INITIAL_PRODUCTS);
     setTransactions(INITIAL_TRANSACTIONS);
     setCart([]);
+    persistProducts(INITIAL_PRODUCTS);
+    persistTransactions(INITIAL_TRANSACTIONS);
     showToast('Data aplikasi berhasil dikembalikan ke data awal', 'info');
+  };
+
+  // Ekspor seluruh katalog produk (termasuk foto) ke file JSON
+  const exportProductsJson = (): string => {
+    return JSON.stringify(products, null, 2);
+  };
+
+  // Impor katalog produk dari file JSON (memungkinkan transfer antar-domain/Vercel)
+  const importProducts = (importedList: Product[]): boolean => {
+    if (!Array.isArray(importedList) || importedList.length === 0) {
+      showToast('File data produk tidak valid!', 'error');
+      return false;
+    }
+    const isValid = importedList.every((p) => p && p.id && p.name && typeof p.price === 'number');
+    if (!isValid) {
+      showToast('Format data produk dalam file tidak sesuai!', 'error');
+      return false;
+    }
+    setProducts(importedList);
+    persistProducts(importedList);
+    showToast(`${importedList.length} produk berhasil diimpor & disimpan permanen!`, 'success');
+    return true;
   };
 
   return (
@@ -297,6 +328,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         updateProduct,
         deleteProduct,
         resetToInitialData,
+        importProducts,
+        exportProductsJson,
         activeReceipt,
         setActiveReceipt,
         toast,
