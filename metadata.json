@@ -1,0 +1,6 @@
+{
+  "name": "Pulchra Hijab - POS & Store Management",
+  "description": "Sistem informasi kasir penjualan dan manajemen toko hijab dewasa & anak-anak dengan pelacakan stok varian, laporan laba kotor, dan cetak struk.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
